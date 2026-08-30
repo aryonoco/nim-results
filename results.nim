@@ -397,35 +397,32 @@ else:
   template maybeLent(T: untyped): untyped =
     T
 
-func raiseResultOk[T, E](self: Result[T, E]) {.noreturn, noinline.} =
+func raiseResultOk() {.noreturn, noinline.} =
   # noinline because raising should take as little space as possible at call
   # site
-  when T is void:
-    raise (ref ResultError[void])(msg: "Trying to access error with value")
-  else:
-    raise (ref ResultError[T])(
-      msg: "Trying to access error with value", error: self.vResultPrivate
-    )
+  raise (ref ResultError[void])(msg: "Trying to access error with value")
 
-func raiseResultError[T, E](self: Result[T, E]) {.noreturn, noinline.} =
+func raiseResultOk[T](v: T) {.noreturn, noinline.} =
+  raise (ref ResultError[T])(msg: "Trying to access error with value", error: v)
+
+func raiseResultError() {.noreturn, noinline.} =
   # noinline because raising should take as little space as possible at call
   # site
+  raise (ref ResultError[void])(msg: "Trying to access value with err")
+
+func raiseResultError[E](e: E) {.noreturn, noinline.} =
   mixin toException
 
   when E is ref Exception:
-    if self.eResultPrivate.isNil: # for example Result.default()!
+    if e.isNil: # for example Result.default()!
       raise (ref ResultError[void])(msg: "Trying to access value with err (nil)")
-    raise self.eResultPrivate
-  elif E is void:
-    raise (ref ResultError[void])(msg: "Trying to access value with err")
-  elif compiles(toException(self.eResultPrivate)):
-    raise toException(self.eResultPrivate)
-  elif compiles($self.eResultPrivate):
-    raise (ref ResultError[E])(error: self.eResultPrivate, msg: $self.eResultPrivate)
+    raise e
+  elif compiles(toException(e)):
+    raise toException(e)
+  elif compiles($e):
+    raise (ref ResultError[E])(error: e, msg: $e)
   else:
-    raise (ref ResultError[E])(
-      msg: "Trying to access value with err", error: self.eResultPrivate
-    )
+    raise (ref ResultError[E])(msg: "Trying to access value with err", error: e)
 
 func raiseResultDefect(m: string, v: auto) {.noreturn, noinline.} =
   mixin `$`
@@ -833,34 +830,41 @@ template capture*[E: Exception](T: type, someExceptionExpr: ref E): Result[T, re
 func `==`*[T0: not void, E0: not void, T1: not void, E1: not void](
     lhs: Result[T0, E0], rhs: Result[T1, E1]
 ): bool {.inline.} =
-  if lhs.oResultPrivate != rhs.oResultPrivate:
-    false
-  else:
-    case lhs.oResultPrivate # and rhs.oResultPrivate implied
+  case lhs.oResultPrivate
+  of true:
+    case rhs.oResultPrivate
     of true:
       lhs.vResultPrivate == rhs.vResultPrivate
+    of false:
+      false
+  of false:
+    case rhs.oResultPrivate
+    of true:
+      false
     of false:
       lhs.eResultPrivate == rhs.eResultPrivate
 
 func `==`*[E0, E1](lhs: Result[void, E0], rhs: Result[void, E1]): bool {.inline.} =
-  if lhs.oResultPrivate != rhs.oResultPrivate:
-    false
-  else:
-    case lhs.oResultPrivate # and rhs.oResultPrivate implied
+  case lhs.oResultPrivate
+  of true:
+    rhs.oResultPrivate
+  of false:
+    case rhs.oResultPrivate
     of true:
-      true
+      false
     of false:
       lhs.eResultPrivate == rhs.eResultPrivate
 
 func `==`*[T0, T1](lhs: Result[T0, void], rhs: Result[T1, void]): bool {.inline.} =
-  if lhs.oResultPrivate != rhs.oResultPrivate:
-    false
-  else:
-    case lhs.oResultPrivate # and rhs.oResultPrivate implied
+  case lhs.oResultPrivate
+  of true:
+    case rhs.oResultPrivate
     of true:
       lhs.vResultPrivate == rhs.vResultPrivate
     of false:
-      true
+      false
+  of false:
+    not rhs.oResultPrivate
 
 func value*[E](self: Result[void, E]) {.inline.} =
   ## Fetch value of result if set, or raise Defect
@@ -917,7 +921,10 @@ func tryValue*[E](self: Result[void, E]) {.inline.} =
   mixin raiseResultError
   case self.oResultPrivate
   of false:
-    self.raiseResultError()
+    when E isnot void:
+      raiseResultError(self.eResultPrivate)
+    else:
+      raiseResultError()
   of true:
     discard
 
@@ -927,7 +934,10 @@ func tryValue*[T: not void, E](self: Result[T, E]): maybeLent T {.inline.} =
   mixin raiseResultError
   case self.oResultPrivate
   of false:
-    self.raiseResultError()
+    when E isnot void:
+      raiseResultError(self.eResultPrivate)
+    else:
+      raiseResultError()
   of true:
     # TODO https://github.com/nim-lang/Nim/issues/22216
     result = self.vResultPrivate
@@ -1026,7 +1036,10 @@ func tryError*[T](self: Result[T, void]) {.inline.} =
   mixin raiseResultOk
   case self.oResultPrivate
   of true:
-    self.raiseResultOk()
+    when T isnot void:
+      raiseResultOk(self.vResultPrivate)
+    else:
+      raiseResultOk()
   of false:
     discard
 
@@ -1036,7 +1049,10 @@ func tryError*[T; E: not void](self: Result[T, E]): maybeLent E {.inline.} =
   mixin raiseResultOk
   case self.oResultPrivate
   of true:
-    self.raiseResultOk()
+    when T isnot void:
+      raiseResultOk(self.vResultPrivate)
+    else:
+      raiseResultOk()
   of false:
     # TODO https://github.com/nim-lang/Nim/issues/22216
     result = self.eResultPrivate
